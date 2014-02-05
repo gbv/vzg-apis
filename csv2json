@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+#ABSTRACT: Read, clean and convert table of APIs
+use v5.14;
+use Config::Any::CSV;
+use JSON;
+
+# TODO: Erkennen wenn name mehrfach vorkommt
+#   (neue Version von Config::Any::CSV)
+
+my ($csvfile, $jsonfile) = @ARGV;
+die "missing input file $csvfile" unless -f $csvfile;
+my $csv = Config::Any::CSV->load($csvfile);
+
+my @apis;
+my %system;
+
+sub bool($) { $_[0] ? 1 : 0 }
+
+while (my ($name, $row) = each %$csv) {
+    next if $name =~ /^[ .]*$/;
+
+    my $api = {
+        name      => $name,
+        extern    => bool($row->{'intern/extern'} =~ /extern/),
+        produktiv => bool($row->{'Status'} eq 'produktiv'),
+        provider  => [ grep { $_ !~ /^\.+$|^-$/ } split /\s*,\s*/, $row->{'Anbieter-System'} ],
+        client    => [ grep { $_ !~ /^\.+$|^-$/ } split /\s*,\s*/, $row->{'Anwendungen'} ],
+        import    => bool($row->{'schreibend/lesend'} =~ /lesend/),
+        export    => bool($row->{'schreibend/lesend'} =~ /schreibend/),
+        extern    => bool($row->{'intern/extern'}=~ /extern/),
+        automatic => $row->{'manuelle Konfigurierung'},
+    };
+    
+    unless ($api->{import} or $api->{export}) {
+        say "'$name' ist weder lesend noch schreibend?!";
+        next;
+    }
+
+    if (!@{$api->{provider}}) {
+        say "'$name' hat keinen Provider!";
+        next;
+    }
+
+    if (!@{$api->{client}}) {
+        say "'$name' hat keine Clients!";
+#        next;
+    }
+
+#    $system{$_} //= { };
+    push @{$system{$_}->{client}}, $name for @{$api->{client}};
+    push @{$system{$_}->{provider}}, $name for @{$api->{provider}};
+
+    push @apis, $api;
+}
+
+open my $fh, ">:encoding(utf8)", $jsonfile;
+print $fh JSON->new->pretty(1)->encode(\@apis);
+close $fh;
+
+say "System\tals Client für\tals Provider für\n";
+for (sort keys %system) {
+    printf "%s\t%s\t%s\n", $_, 
+        join (", ", @{ $system{$_}->{client} // [ ] }),
+        join (", ", @{$system{$_}->{provider} // [ ] });
+}

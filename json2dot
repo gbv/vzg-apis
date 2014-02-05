@@ -1,0 +1,76 @@
+#!/usr/bin/env perl
+use v5.14;
+use JSON;
+use GraphViz2;
+
+my $jsonfile = shift @ARGV;
+die "missing input file $jsonfile" unless -f $jsonfile;
+open my $fh, "<", $jsonfile or die "$jsonfile: $!";
+
+my $apis = JSON->new->utf8->decode( do { local (@ARGV,$/) = ($jsonfile); <> } );
+
+my $graph = GraphViz2->new( 
+    directed => 0, 
+    title    => "Schnittstellen",
+    overlap  => 0, #'voronoi', # prism, scalexy, voronoi
+    splines  => 1,
+    concentrate => 1,
+    nodesep  => 0.5,
+);
+$graph->default_edge(); #decorate => 1 );
+
+
+foreach my $a (@$apis) {
+    foreach my $provider (@{$a->{provider}}) {
+
+        my @clients = @{$a->{client}};
+        if (!@clients) {
+            my $id = 'x'.int(rand(1024));
+            $graph->add_node( name => $id, label => '', shape => 'point' );
+            push @clients, $id;
+        }
+
+        foreach my $client (@clients) {
+
+            my %edge = (
+                label => $a->{name},
+                from  => $provider,
+                to    => $client,
+            );
+
+            if ($a->{import} && !$a->{export}) {
+                $edge{dir} = 'forward';
+            } elsif (!$a->{import} && $a->{export}) {
+                $edge{dir} = 'back';
+            } else {
+                $edge{dir} = 'both';
+            }
+
+            my @style = $a->{extern} ? ('bold') : ();
+            push @style, 'dotted' if !$a->{produktiv} or $a->{automatic} =~ /regelm.+ig/;
+
+            $edge{style} = join(',', @style) if @style;
+
+            if (!$a->{extern}) {
+                $edge{color} = '#666666';
+                $edge{arrowhead} = 'empty';
+                $edge{arrowtail} = 'empty';
+            }
+
+            $graph->add_edge( %edge );
+       }
+    }
+}
+
+foreach (@ARGV) {
+    my $outfile = $_;
+    if ($outfile =~ /\.dot/) {
+        $graph->run(format => 'dot', output_file => $outfile);
+    } elsif ($outfile =~ /\.(svg|png)/) {
+        $graph->run(
+            format => $1, output_file => $outfile, 
+            driver => 'fdp', #            K => 3
+        );
+    }
+}
+
